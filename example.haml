@@ -1,0 +1,56 @@
+%link{href: "css/font-awesome.min.css", rel: "stylesheet"}
+%link{href: "css/bootstrap.min.css", rel: "stylesheet"}
+%link{href: "css/basic-upload.css", rel: "stylesheet"}
+
+%script{src: "js/jquery-1.10.2.js"}
+%script{src: "js/underscore.js"}
+%script{src:"js/hmac-sha1.js"}
+%script{src: "js/enc-base64-min.js"}
+
+%script{src: "js/ .js"}
+
+.container.upload-container
+  %h2
+    Drag & Drop a File
+  %h2
+    Or select an option below
+  %form#upload-form
+    .row
+      %span.btn.btn-success.fileinput-button
+        %i.fa.fa-plus.fa-4x
+        %p Select files...
+        %input#fileupload{multiple: "multiple", name: "files[]", type: "file"}
+      %button.btn.btn-primary.start{type: "submit"}
+        %i.fa.fa-upload.fa-4x
+        %p Start upload
+    .row
+      %table.upload-table.full-width.table-striped
+        %thead
+          %tr
+            %th{class:"col-md-2"} File Name
+            %th{class:"col-md-1"} File Size
+            %th{class:"col-md-1"} Progress
+            %th{class:"col-md-1"} Delete
+        %tbody
+  .upload-footer
+
+
+%script{:id => "upload-template", :type => "text/template"}
+  %tr{:class=> 'upload-{{fileNumber}}'}
+    %td.col-md-2 {{ file.name }}
+    %td.col-md-1 {{ (file.size/1024/1024).toFixed(2) }} MB
+    %td.col-md-1
+      .progress.progress-striped.active.mts
+        .progress-bar
+          %span.sr-only
+          %span.status
+    %td
+      %span.btn.btn-danger.delete-upload
+        %i.fa.fa-times
+
+:javascript
+  $( document ).ready(function() {
+    // Edit these config variables
+    config = new Config(maxFileSize, bucket, accessKey, secretKey, folderName)
+    new Uploader(config);
+  });

@@ -1,0 +1,69 @@
+<link href='css/font-awesome.min.css' rel='stylesheet'>
+<link href='css/bootstrap.min.css' rel='stylesheet'>
+<link href='css/basic-upload.css' rel='stylesheet'>
+<script src='js/jquery-1.10.2.js'></script>
+<script src='js/underscore.js'></script>
+<script src='js/hmac-sha1.js'></script>
+<script src='js/enc-base64-min.js'></script>
+<script src='js/s3-js-file-uploader.js'></script>
+<div class='container upload-container'>
+  <h2>
+    Drag & Drop a File
+  </h2>
+  <h2>
+    Or select an option below
+  </h2>
+  <form id='upload-form'>
+    <div class='row'>
+      <span class='btn btn-success fileinput-button'>
+        <i class='fa fa-plus fa-4x'></i>
+        <p>Select files...</p>
+        <input id='fileupload' multiple='multiple' name='files[]' type='file'>
+      </span>
+      <button class='btn btn-primary start' type='submit'>
+        <i class='fa fa-upload fa-4x'></i>
+        <p>Start upload</p>
+      </button>
+    </div>
+    <div class='row'>
+      <table class='upload-table full-width table-striped'>
+        <thead>
+          <tr>
+            <th class='col-md-2'>File Name</th>
+            <th class='col-md-1'>File Size</th>
+            <th class='col-md-1'>Progress</th>
+            <th class='col-md-1'>Delete</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </form>
+  <div class='upload-footer'></div>
+</div>
+<script id='upload-template' type='text/template'>
+  <tr class='upload-{{fileNumber}}'>
+    <td class='col-md-2'>{{ file.name }}</td>
+    <td class='col-md-1'>{{ (file.size/1024/1024).toFixed(2) }} MB</td>
+    <td class='col-md-1'>
+      <div class='progress progress-striped active mts'>
+        <div class='progress-bar'>
+          <span class='sr-only'></span>
+          <span class='status'></span>
+        </div>
+      </div>
+    </td>
+    <td>
+      <span class='btn btn-danger delete-upload'>
+        <i class='fa fa-times'></i>
+      </span>
+    </td>
+  </tr>
+</script>
+<script>
+  $( document ).ready(function() {
+  
+    config = new Config(1099511627776, 'neb-test-upload2', 'AKIAJCLOMII7QUTZWJ3A', '0Nf9063oUeeaKRfNhtAvVD0bE6uhPjykdkXDI3zg', 'nebupload_ksun@brookeside.com_20140926_144657')
+    new Uploader(config);
+  });
+</script>
