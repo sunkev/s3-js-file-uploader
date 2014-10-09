@@ -63,7 +63,7 @@
 <script>
   $( document ).ready(function() {
   
-    config = new Config(1099511627776, 'neb-test-upload2', 'AKIAJCLOMII7QUTZWJ3A', '0Nf9063oUeeaKRfNhtAvVD0bE6uhPjykdkXDI3zg', 'nebupload_ksun@brookeside.com_20140926_144657')
+    var config = new Config(maxFileSize, bucket, accessKey, secretKey, folderName);
     new Uploader(config);
   });
 </script>

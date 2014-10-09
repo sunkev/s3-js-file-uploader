@@ -5,15 +5,11 @@ Upload multipart or single part files directly to s3
 
 # Features
 
-Written in pure javascript, so upload is async and on client side.
-
-Ability to upload files up to 2TB using amazon s3 multipart upload.
-
-No need for database.
-
-Uses CORS
-
-Flexibility to change handlers for upload success.
+* Written in pure javascript, so upload is async and on client side.
+* Ability to upload files up to 2TB using amazon s3 multipart upload.
+* No need for database.
+* Uses CORS
+* Flexibility to change handlers for upload success.
 
 
 Dependencies
