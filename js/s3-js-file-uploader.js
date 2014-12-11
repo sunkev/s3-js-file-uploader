@@ -32,7 +32,65 @@ function TemplateRenderer(uploadTemplate) {
   _.bindAll(this, "renderedUploadTemplate", "renderXML");
 }
 
-function Handler(options){
+function Signer(upload){
+  // exists because date has to be set right before ajax request, else there is a request time out after 15 mins
+  this.upload           = upload;
+  var config    = upload.config;
+  var bucket    = config.bucket;
+  var awsObjURL = upload.awsObjURL;
+  var uploadId  = upload.uploadId;
+
+  this.date             = new Date().toUTCString();
+  this.initSingleStr    = 'PUT\n\nmultipart/form-data\n\nx-amz-date:'+this.date+'\n/'+bucket+'/'+awsObjURL;
+  this.initMultiStr     = 'POST\n\n\n\nx-amz-date:'+this.date+'\n/'+bucket+'/'+awsObjURL+'?uploads';
+
+  this.abortStr         = function(){
+    return 'DELETE\n\n\n\nx-amz-date:'+this.date+
+      '\n/'+bucket+'/'+
+      awsObjURL+
+      '?uploadId='+uploadId;
+  };
+
+  this.finishMultiStr   = function(){
+    return 'POST\n\ntext/plain;charset=UTF-8\n\nx-amz-date:'+this.date+
+      '\n/'+bucket+'/'+
+      awsObjURL+
+      '?uploadId='+uploadId;
+  };
+
+  this.multipartInitURL = 'https://' + bucket + '.s3.amazonaws.com/'+awsObjURL+'?uploads';
+
+  this.singlepartInitURL = 'https://' + bucket + '.s3.amazonaws.com/'+awsObjURL;
+
+  this.partUploadURL = 'https://' + bucket + '.s3.amazonaws.com/'+awsObjURL+'?uploadId='+uploadId;
+
+  // part stuff
+  this.partStr = function(part){
+    return 'PUT\n\nmultipart/form-data\n\nx-amz-date:' + this.date +
+      '\n/' + bucket + '/' +
+      awsObjURL +
+      '?partNumber=' + part.partNumber +
+      '&uploadId=' + uploadId;
+  };
+  this.partURL = function(part){
+    return 'https://' + bucket + '.s3.amazonaws.com/' +
+      awsObjURL +
+      '?partNumber=' + part.partNumber
+      + '&uploadId=' + uploadId;
+  };
+
+  this.encryptAuth = function(stringToSign){
+    var crypto = CryptoJS.HmacSHA1(stringToSign, config.secretKey).toString(CryptoJS.enc.Base64);
+    return 'AWS'+' '+config.accessKey+':'+crypto
+  };
+
+  _.bindAll(this, "abortStr", "finishMultiStr", "partStr", "partURL", "encryptAuth");
+
+}
+
+function Handler(uploader, options){
+  this.uploader = uploader;
+
   this.successPartUploadHandler = function(part, jqXHR, callback){
     part.ETag = jqXHR.getResponseHeader('ETag').replace(/"/g, '');
     part.upload.completedParts.push(part);
@@ -49,26 +107,74 @@ function Handler(options){
     }
   };
 
-  this.successUploadCompleteHandler = function(uploader, upload){
-    uploader.completedUploads.push(upload);
+  this.successUploadCompleteHandler = function(upload){
+    this.uploader.completedUploads.push(upload);
     this.customSuccessHandler();
-    if (uploader.completedUploads.length === uploader.uploadQueue.length){
+    if (this.uploader.completedUploads.length === this.uploader.uploadQueue.length){
       this.allUploadsFinishedHandler();
-      uploader.completedUploads = [];
+      this.uploader.completedUploads = [];
     }
   };
 
+  // two types of uploads, so callback needs to be passed in
+  this.initUploadFailureHandler = function(upload, callback){
+    upload.retries += 1;
+    if(upload.retries < 4)
+    {
+      setTimeout(function() {
+        callback(upload);
+      }, 2000);
+    }
+    else
+    {
+      upload.uploadFailed();
+      console.log('Upload' + ' ' + upload.file.name + ' has failed to start uploading')
+    }
+  };
+
+  this.partUploadFailure = function(part){
+    var uploader = this.uploader;
+    part.retries += 1;
+    if(part.retries < 4)
+    {
+      setTimeout(function() {
+        uploader.sendPartToAmazon(part);
+      }, 2000);
+
+      console.log('Upload'+' '+part.upload.file.name+' part '+part.partNumber+' has failed to start uploading and is retrying')
+    }
+    else
+    {
+      this.multiPartFailUploadHandler(part.upload);
+      console.log('Upload'+' '+part.upload.file.name+' part '+part.partNumber+' has failed to start uploading 3 times');
+      part.upload.uploadFailed();
+      console.log('Upload' + ' ' + part.upload.file.name + ' has failed to start uploading')
+    }
+  };
+
+
   this.multiPartFailUploadHandler = function(upload){
-    var auth = this.encryptAuth(upload.abortStr());
-    upload.uploadFailed();
-    $.ajax({
-      url : 'https://' + upload.config.bucket + '.s3.amazonaws.com/'+encodeURI(upload.awsObjURL)+'?uploadId='+upload.uploadId,
-      type: 'DELETE',
-      beforeSend: function (xhr) {
-        xhr.setRequestHeader("x-amz-date", upload.date);
-        xhr.setRequestHeader("Authorization", auth);
-      }
-    })
+    upload.retries += 1;
+    if(upload.retries < 4)
+    {
+      setTimeout(function() {
+        this.completeMultipart(upload);
+      }, 2000);
+    }
+    else
+    {
+      var auth = this.encryptAuth(upload.abortStr());
+      $.ajax({
+        url : 'https://' + upload.config.bucket + '.s3.amazonaws.com/'+encodeURI(upload.awsObjURL)+'?uploadId='+upload.uploadId,
+        type: 'DELETE',
+        beforeSend: function (xhr) {
+          xhr.setRequestHeader("x-amz-date", upload.date);
+          xhr.setRequestHeader("Authorization", auth);
+        }
+      });
+      upload.uploadFailed();
+      console.log('Upload' + ' ' + upload.file.name + ' multipart upload did not combine')
+    }
   };
 
   this.customSuccessPartHandler = function(){};
@@ -116,26 +222,11 @@ function Upload(el, file, config){
   this.file             = file;
   this.parts            = [];
   this.config           = config;
-  this.date             = new Date().toUTCString();
+  this.awsObjURL        = encodeURI(this.config.folderName + '/' + this.file.name).replace(/%20/g, "_");
   this.totalChunks      = Math.ceil(this.file.size / this.config.multipartMinSize);
   this.canUseMultipart  = this.file.size > this.config.multipartMinSize;
   this.completedParts   = [];
-  this.awsObjURL        = encodeURI(this.config.folderName + '/' + this.file.name).replace(/%20/g, "_");
-  this.initSingleStr    = 'PUT\n\nmultipart/form-data\n\nx-amz-date:'+this.date+'\n/'+this.config.bucket+'/'+this.awsObjURL;
-  this.initMultiStr     = 'POST\n\n\n\nx-amz-date:'+this.date+'\n/'+this.config.bucket+'/'+this.awsObjURL+'?uploads';
-  this.abortStr         = function(){
-    return 'DELETE\n\n\n\nx-amz-date:'+this.date+
-      '\n/'+this.config.bucket+'/'+
-      this.awsObjURL+
-      '?uploadId='+this.uploadId;
-  };
-
-  this.finishMultiStr   = function(){
-    return 'POST\n\ntext/plain;charset=UTF-8\n\nx-amz-date:'+this.date+
-      '\n/'+this.config.bucket+'/'+
-      this.awsObjURL+
-      '?uploadId='+this.uploadId;
-  };
+  this.retries     = 0;
 
   this.progressHandler = function(e){
     var percent = Math.round((e.loaded / e.total) * 100)+'%';
@@ -160,20 +251,12 @@ function UploadPart(file, partNumber, upload) {
   this.endByte = this.upload.config.multipartMinSize * (partNumber);
   this.blob = this.file.slice(this.startByte, this.endByte);
   this.ETag = '';
-  this.stringToSign = function(){
-    return 'PUT\n\nmultipart/form-data\n\nx-amz-date:' + this.upload.date +
-      '\n/' + this.upload.config.bucket + '/' +
-      upload.awsObjURL +
-      '?partNumber=' + this.partNumber +
-      '&uploadId=' + this.upload.uploadId;
-  };
-  this.url = function(){
-    return 'https://' + this.upload.config.bucket + '.s3.amazonaws.com/' +
-      upload.awsObjURL +
-      '?partNumber=' + this.partNumber
-      + '&uploadId=' + this.upload.uploadId;
-  };
+
+  this.retries = 0;
 }
+
+//ConfigurationRetriever: fetches the configuration for submission
+//Configuration model: abstraction to reflect the bucket, accessKey, etc
 
 function Uploader(config, handlerOptions){
 
@@ -181,7 +264,7 @@ function Uploader(config, handlerOptions){
   this.config           = config;
   this.templateRenderer = new TemplateRenderer('#upload-template');
   this.uploadForm       = new UploaderForm('#upload-form');
-  this.handler          = new Handler(handlerOptions);
+  this.handler          = new Handler(this, handlerOptions);
   this.uploadQueue      = [];
   this.completedUploads = [];
   this.uploadCounter    = 0;
@@ -236,103 +319,116 @@ function Uploader(config, handlerOptions){
   };
 
   this.initiateMultipartUpload = function(upload){
-    var auth = this.encryptAuth(upload.initMultiStr);
+    var signer = new Signer(upload);
+    var auth = signer.encryptAuth(signer.initMultiStr);
     return $.ajax({
-      url : 'https://' + upload.config.bucket + '.s3.amazonaws.com/'+upload.awsObjURL+'?uploads',
+      url : signer.multipartInitURL,
       type: 'post',
       dataType: 'xml',
       context: this,
       beforeSend: function (xhr) {
-        xhr.setRequestHeader("x-amz-date", upload.date);
+        xhr.setRequestHeader("x-amz-date", signer.date);
         xhr.setRequestHeader("Authorization", auth);
       },
       success: function(data) {
         upload.uploadId = data.getElementsByTagName("UploadId")[0].innerHTML;
         this.uploadParts(upload);
+      },
+      error: function(){
+        this.handler.initUploadFailureHandler(upload, this.initiateMultipartUpload)
       }
     });
   };
 
   this.sendFullFileToAmazon = function(upload){
-
-    var auth = this.encryptAuth(upload.initSingleStr);
+    var signer = new Signer(upload);
+    var auth = signer.encryptAuth(signer.initSingleStr);
     $.ajax({
       xhr: function(){
         var xhr = $.ajaxSettings.xhr() ;
         xhr.upload.addEventListener("progress", upload.progressHandler);
         return xhr ;
       },
-      url: 'https://' + upload.config.bucket + '.s3.amazonaws.com/'+ upload.awsObjURL,
+      url: signer.singlepartInitURL,
       type: 'PUT',
       data: upload.file,
       context: this,
       contentType:'multipart/form-data',
       processData: false,
       beforeSend: function (xhr) {
-        xhr.setRequestHeader("x-amz-date", upload.date);
+        xhr.setRequestHeader("x-amz-date", signer.date);
         xhr.setRequestHeader("Authorization", auth);
       },
       success: function() {
-        this.handler.successUploadCompleteHandler(this, upload)
+        this.handler.successUploadCompleteHandler(upload)
       },
-      fail: function(){
-        upload.uploadFailed();
+      error: function(){
+        this.handler.initUploadFailureHandler(upload, this.sendFullFileToAmazon);
       }
     })
   };
 
   this.uploadParts = function(upload){
     for(var partNumber=1; partNumber <= upload.totalChunks; partNumber++){
-      var part = new UploadPart(upload.file, partNumber, upload);
-      upload.parts.push(part);
-      this.sendPartToAmazon(part);
+      this.timedUploadPart(partNumber, upload);
     }
   };
 
+  this.timedUploadPart = function(partNumber, upload){
+    var uploader = this;
+    setTimeout(function(){
+      var part = new UploadPart(upload.file, partNumber, upload);
+      upload.parts.push(part);
+      uploader.sendPartToAmazon(part);
+    }, 5000 * partNumber);
+  };
+
   this.completeMultipart = function(upload){
-    var auth = this.encryptAuth(upload.finishMultiStr());
+    var signer = new Signer(upload);
+    var auth = signer.encryptAuth(signer.finishMultiStr());
     var data = this.templateRenderer.renderXML(upload);
 
     $.ajax({
-      url : 'https://' + upload.config.bucket + '.s3.amazonaws.com/'+upload.awsObjURL+'?uploadId='+upload.uploadId,
+      url : signer.partUploadURL,
       type: 'POST',
       dataType: 'xml',
       data: data,
       contentType: false,
       context: this,
       beforeSend: function (xhr) {
-        xhr.setRequestHeader("x-amz-date", upload.date);
+        xhr.setRequestHeader("x-amz-date", signer.date);
         xhr.setRequestHeader("Authorization", auth);
       },
       success: function() {
-        this.handler.successUploadCompleteHandler(this, upload)
+        this.handler.successUploadCompleteHandler(upload)
       },
-      fail: function() {
+      error: function() {
         this.handler.multiPartFailUploadHandler(upload)
       }
     })
   };
 
   this.sendPartToAmazon = function(part){
-    var auth = this.encryptAuth(part.stringToSign());
+    var signer = new Signer(part.upload);
+    var auth = signer.encryptAuth(signer.partStr(part));
 
     $.ajax({
-      url: part.url(),
+      url: signer.partURL(part),
       type: 'PUT',
       dataType: 'xml',
       data: part.blob,
       contentType:'multipart/form-data',
       processData: false,
       beforeSend: function (xhr) {
-        xhr.setRequestHeader("x-amz-date", part.upload.date);
+        xhr.setRequestHeader("x-amz-date", signer.date);
         xhr.setRequestHeader("Authorization", auth);
       },
       context: this,
       success: function(data, textStatus, jqXHR) {
         this.handler.successPartUploadHandler(part, jqXHR, this.completeMultipart)
       },
-      fail: function() {
-        this.handler.multiPartFailUploadHandler(part.upload)
+      error: function() {
+        this.handler.partUploadFailure(part)
       }
     })
   };
@@ -344,14 +440,9 @@ function Uploader(config, handlerOptions){
     this.uploadQueue = _.without(this.uploadQueue, upload)
   };
 
-  this.encryptAuth = function(stringToSign){
-    var crypto = CryptoJS.HmacSHA1(stringToSign, this.config.secretKey).toString(CryptoJS.enc.Base64);
-    return 'AWS'+' '+this.config.accessKey+':'+crypto
-  };
-
   _.bindAll(this, "sendPartToAmazon", "removeUpload", "addUploadToView", "createUpload");
   _.bindAll(this, "getFile", "startUploads", "initiateMultipartUpload", "sendFullFileToAmazon");
-  _.bindAll(this, "encryptAuth", "uploadParts", "completeMultipart");
+  _.bindAll(this, "uploadParts", "timedUploadPart", "completeMultipart");
 
   this.uploadForm.$fileInput.on('change', this.getFile);
   this.uploadForm.$container.on('drop', this.getFile);
